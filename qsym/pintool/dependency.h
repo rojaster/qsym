@@ -8,8 +8,9 @@
 
 namespace qsym {
 
-  typedef std::set<size_t> DependencySet;
-
+  //  typedef std::set<size_t> DependencySet;
+  using DependencySet = std::set<size_t>;
+/* @Information(alekum): DependencyNode might not be used
   class DependencyNode {
     public:
       DependencyNode();
@@ -20,12 +21,12 @@ namespace qsym {
     private:
       DependencySet* dependencies_;
   };
-
+*/
   template<class T>
   class DependencyTree {
     public:
       void addNode(std::shared_ptr<T> node) {
-        DependencySet* deps = node->getDependencies();
+        DependencySet* deps = &node->getDeps(); // node->getDependencies();
         nodes_.push_back(node);
         deps_.insert(deps->begin(), deps->end());
       }
@@ -44,6 +45,14 @@ namespace qsym {
 
       const std::vector<std::shared_ptr<T>>& getNodes() const {
         return nodes_;
+      }
+
+      friend std::ostream& operator<<(std::ostream& os, const DependencyTree<T>& DT) {
+        os << "\tn = [\n";
+        for(const auto& node : nodes_) os << "\t\t" << node->toString() << std::endl;
+        os << "\t],\n\td = [ ";
+        for(const auto dep : deps_) os << dep << ' ';
+        os << "]\n";
       }
 
     private:
@@ -66,7 +75,7 @@ namespace qsym {
       }
 
       void addNode(std::shared_ptr<T> node) {
-        DependencySet* deps = node->getDependencies();
+        DependencySet* deps = &node->getDeps(); // node->getDependencies();
         std::shared_ptr<DependencyTree<T>> tree = NULL;
         for (const size_t& index : *deps) {
           std::shared_ptr<DependencyTree<T>> other_tree = find(index);
@@ -83,6 +92,13 @@ namespace qsym {
         tree->addNode(node);
       }
 
+      friend std::ostream& operator<<(std::ostream& os, const DependencyForest<T>& DF) {
+        size_t idx = -1;
+        for(const auto& DT : forest_) {
+          os << "DT[index=" << ++idx << "] :: {\n";
+          if(DT) os << DT;
+        }
+      }
     private:
       std::vector<std::shared_ptr<DependencyTree<T>>> forest_;
   };

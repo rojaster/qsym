@@ -1,6 +1,7 @@
 #include <set>
 #include <byteswap.h>
 #include "solver.h"
+#include <chrono>
 
 namespace qsym {
 
@@ -125,24 +126,33 @@ void Solver::add(z3::expr expr) {
 }
 
 z3::check_result Solver::check() {
-  uint64_t before = getTimeStamp();
+  // uint64_t before = getTimeStamp();
   z3::check_result res;
-  LOG_STAT(
-      "SMT: { \"solving_time\": " + decstr(solving_time_) + ", "
-      + "\"total_time\": " + decstr(before - start_time_) + " }\n");
-  // LOG_DEBUG("Constraints: " + solver_.to_smt2() + "\n");
   try {
+    // @Information(alekum): Total solving time is a sum of elapsed times for checking pushed constraints
+    // here we publish elapsed time for checking pushed constraint and its dependencies, and after
+    // add this time to the total solving time...Might be useful to save time to publish common stat at the end
+    // of the execution flow.
+    //LOG_STAT(
+    //         "SMT: { \"solving_time\": " + decstr(solving_time_) + ", "
+    //         + "\"total_time\": " + decstr(before - start_time_) + " }\n");
+    // LOG_DEBUG("Constraints: " + solver_.to_smt2() + "\n");
+    auto before = std::chrono::steady_clock::now();
     res = solver_.check();
+    auto after = std::chrono::steady_clock::now();
+    //uint64_t cur = getTimeStamp();
+    //uint64_t elapsed = cur - before;
+    std::chrono::duration<double> elapsed = before - after;
+    solving_time_ += elapsed;
+    LOG_STAT("SMT: { \"elapsed_solving_time\": " + decstr(elapsed) + " }\n");
+    LOG_STAT("SMT: { \"total_solving_time\"  : " + decstr(solving_time_) + " }\n");
+
   }
   catch(z3::exception e) {
     // https://github.com/Z3Prover/z3/issues/419
     // timeout can cause exception
     res = z3::unknown;
   }
-  uint64_t cur = getTimeStamp();
-  uint64_t elapsed = cur - before;
-  solving_time_ += elapsed;
-  LOG_STAT("SMT: { \"solving_time\": " + decstr(solving_time_) + " }\n");
   return res;
 }
 
@@ -161,9 +171,6 @@ void Solver::addJcc(ExprRef e, bool taken, ADDRINT pc) {
   // Save the last instruction pointer for debugging
   last_pc_ = pc;
 
-  if (e->isConcrete())
-    return;
-
   // if e == Bool(true), then ignore
   if (e->kind() == Bool) {
     assert(!(castAs<BoolExpr>(e)->value()  ^ taken));
@@ -175,15 +182,12 @@ void Solver::addJcc(ExprRef e, bool taken, ADDRINT pc) {
   // check duplication before really solving something,
   // some can be handled by range based constraint solving
   bool is_interesting;
-  if (pc == 0) {
-    // If addJcc() is called by special case, then rely on last_interested_
-    is_interesting = last_interested_;
-  }
-  else
-    is_interesting = isInterestingJcc(e, taken, pc);
+  // If addJcc() is called by special case, then rely on last_interested_
+  if (pc == 0) is_interesting = last_interested_;
+  else is_interesting = isInterestingJcc(e, taken, pc);
 
-  if (is_interesting)
-    negatePath(e, taken);
+  if (e->isConcrete()) e->trySymbolize();
+  if (is_interesting) negatePath(e, taken);
   addConstraint(e, taken, is_interesting);
 }
 
@@ -389,25 +393,42 @@ void Solver::addToSolver(ExprRef e, bool taken) {
   add(e->toZ3Expr());
 }
 
+void Solver::resolveConstraints(ExprRef e, const DependencySet& concrete) {
+  if(!e) return;
+  if(e->kind() == Kind::Read) {
+    auto RE = castAsNonNull<ReadExpr>(e);
+    concrete.count(RE->index()) ? RE->concretize() : RE->symbolize();
+  }
+  for(size_t i = 0; i < e->num_children(); ++i) resolveConstraints(e->getChild(i), concrete);
+}
+
 void Solver::syncConstraints(ExprRef e) {
   std::set<std::shared_ptr<DependencyTree<Expr>>> forest;
-  DependencySet* deps = e->getDependencies();
+  DependencySet* deps = &e->getDeps(); //e->getDependencies();
+  DependencySet concrete;
 
-  for (const size_t& index : *deps)
-    forest.insert(dep_forest_.find(index));
+  for (const size_t& index : *deps) {
+    auto DT = dep_forest_.find(index);
+    for(const size_t d : DT->getDependencies()) {
+      if(!deps->count(d)) concrete.insert(d);
+    }
+    forest.insert(DT);
+  }
 
   for (std::shared_ptr<DependencyTree<Expr>> tree : forest) {
     std::vector<std::shared_ptr<Expr>> nodes = tree->getNodes();
     for (std::shared_ptr<Expr> node : nodes) {
-      if (isRelational(node.get()))
-        addToSolver(node, true);
-      else {
+      if (isRelational(node.get())) {
+        resolveConstraints(node, concrete);
+        if(!node->isConcrete()) addToSolver(node, true);
+      } else {
         // Process range-based constraints
         bool valid = false;
         for (INT32 i = 0; i < 2; i++) {
           ExprRef expr_range = getRangeConstraint(node, i);
           if (expr_range != NULL) {
-            addToSolver(expr_range, true);
+            resolveConstraints(expr_range, concrete);
+            if(!expr_range->isConcrete()) addToSolver(expr_range, true);
             valid = true;
           }
         }
@@ -437,8 +458,9 @@ void Solver::addConstraint(ExprRef e) {
     QSYM_ASSERT(castAs<BoolExpr>(e)->value());
     return;
   }
-  if (e->isConcrete())
-    return;
+  // @Information(alekum): Don't skip constraints
+  //if (e->isConcrete())
+  //  return;
   dep_forest_.addNode(e);
 }
 

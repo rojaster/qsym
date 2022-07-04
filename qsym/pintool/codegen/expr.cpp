@@ -159,8 +159,8 @@ UINT32 getMSB(
 
 // Expr declaration
 Expr::Expr(Kind kind, UINT32 bits)
-  : DependencyNode()
-  , kind_(kind)
+//  : DependencyNode()
+  : kind_(kind)
   , bits_(bits)
   , children_()
   , context_(g_z3_context)
@@ -168,6 +168,7 @@ Expr::Expr(Kind kind, UINT32 bits)
   , hash_(NULL)
   , range_sets{}
   , isConcrete_(true)
+  , isInvalidated_(false)
   , depth_(-1)
   , deps_(NULL)
   , leading_zeros_((UINT)-1)
@@ -251,9 +252,10 @@ void Expr::simplify() {
           children_[i]->simplify();
       }
       else {
-        if (expr_ == NULL) {
+        if (isInvalidated() || expr_ == NULL) {
           z3::expr z3_expr = toZ3Expr(true);
           z3_expr = z3_expr.simplify();
+          delete expr_;
           expr_ = new z3::expr(z3_expr);
         }
       }

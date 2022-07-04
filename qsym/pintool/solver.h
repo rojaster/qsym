@@ -13,6 +13,7 @@
 #include "expr.h"
 #include "thread_context.h"
 #include "dependency.h"
+#include <chrono>
 
 namespace qsym {
 
@@ -21,8 +22,8 @@ typedef std::unordered_set<ExprRef, ExprRefHash, ExprRefEqual> ExprRefSetTy;
 
 class Solver {
 public:
-  ExprRefSetTy updated_exprs_;
-  ExprRefSetTy added_exprs_;
+  //ExprRefSetTy updated_exprs_;
+  //ExprRefSetTy added_exprs_;
 
   Solver(
       const std::string input_file,
@@ -57,10 +58,10 @@ protected:
   AflTraceMap           trace_;
   bool                  last_interested_;
   bool                  syncing_;
-  uint64_t              start_time_;
-  uint64_t              solving_time_;
   ADDRINT               last_pc_;
+  uint64_t              start_time_;
   DependencyForest<Expr> dep_forest_;
+  std::chrono::duration<double> solving_time_;
 
   void checkOutDir();
   void readInput();
@@ -75,6 +76,7 @@ protected:
 
   void addToSolver(ExprRef e, bool taken);
   void syncConstraints(ExprRef e);
+  void resolveConstraints(ExprRef e, const DependencySet& concrete);
 
   void addConstraint(ExprRef e, bool taken, bool is_interesting);
   void addConstraint(ExprRef e);

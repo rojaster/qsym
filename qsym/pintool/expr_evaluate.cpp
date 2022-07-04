@@ -14,7 +14,7 @@ namespace qsym {
   }
 
   ExprRef Expr::evaluate() {
-    if (evaluation_ == NULL)
+    if (isInvalidated() || evaluation_ == NULL)
       evaluation_ = evaluateImpl();
     return evaluation_;
   }
