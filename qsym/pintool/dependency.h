@@ -46,15 +46,15 @@ namespace qsym {
       const std::vector<std::shared_ptr<T>>& getNodes() const {
         return nodes_;
       }
-
+    /* 
       friend std::ostream& operator<<(std::ostream& os, const DependencyTree<T>& DT) {
         os << "\tn = [\n";
-        for(const auto& node : nodes_) os << "\t\t" << node->toString() << std::endl;
+        for(const auto& node : DT.getNodes()) os << "\t\t" << node->toString() << std::endl;
         os << "\t],\n\td = [ ";
-        for(const auto dep : deps_) os << dep << ' ';
+        for(const auto dep : DT.getDependencies()) os << dep << ' ';
         os << "]\n";
       }
-
+    */
     private:
       std::vector<std::shared_ptr<T>> nodes_;
       DependencySet deps_;
@@ -91,14 +91,15 @@ namespace qsym {
         }
         tree->addNode(node);
       }
-
+    /* 
       friend std::ostream& operator<<(std::ostream& os, const DependencyForest<T>& DF) {
         size_t idx = -1;
-        for(const auto& DT : forest_) {
+        for(const auto& DT : DF.forest_) {
           os << "DT[index=" << ++idx << "] :: {\n";
           if(DT) os << DT;
         }
       }
+    */
     private:
       std::vector<std::shared_ptr<DependencyTree<T>>> forest_;
   };

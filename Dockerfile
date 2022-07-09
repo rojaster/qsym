@@ -7,6 +7,7 @@ RUN mkdir -p /workdir/qsym
 
 WORKDIR /workdir/qsym
 COPY . /workdir/qsym
+#VOLUME . /workdir/qsym
 
 RUN ./setup.sh
-RUN pip install .
+# RUN pip install .

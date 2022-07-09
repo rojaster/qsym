@@ -704,7 +704,7 @@ protected:
 
   z3::expr toZ3ExprRecursively(bool verbose) override {
     ExprRef e = getChild(0);
-    if(e->isConcrete()) return evalute()->toZ3Expr(verbose);
+    if(e->isConcrete()) return evaluate()->toZ3Expr(verbose);
     return z3::sext(e->toZ3Expr(verbose), bits_ - e->bits());
   }
 
