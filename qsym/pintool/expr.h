@@ -109,11 +109,11 @@ inline std::shared_ptr<T> castAsNonNull(ExprRef e) {
 }
 
 class ExprBuilder;
-class IndexSearchTree;
+//class IndexSearchTree;
 
-typedef std::set<INT32> DepSet;
+typedef std::set<size_t> DependencySet;
 
-class Expr : public DependencyNode {
+class Expr {
   public:
     Expr(Kind kind, UINT32 bits);
     virtual ~Expr();
@@ -135,11 +135,11 @@ class Expr : public DependencyNode {
       return bits() / CHAR_BIT;
     }
 
-    inline ExprRef getChild(UINT32 index) const {
+    inline ExprRef getChild(size_t index) const {
       return children_[index];
     }
 
-    inline INT32 num_children() const {
+    inline size_t num_children() const {
       return children_.size();
     }
 
@@ -161,15 +161,23 @@ class Expr : public DependencyNode {
 
     INT32 depth();
 
-    bool isConcrete() const {
+    inline void inval() {
+      isInvalidated_ = true;
+    }
+
+    inline bool isInvalidated() const {
+      return isInvalidated_;
+    }
+
+    inline bool isConcrete() const {
       return isConcrete_;
     }
 
-    bool isConstant() const {
+    inline bool isConstant() const {
       return kind_ == Constant;
     }
 
-    bool isBool() const {
+    inline bool isBool() const {
       return kind_ == Bool;
     }
 
@@ -177,19 +185,19 @@ class Expr : public DependencyNode {
     bool isAllOnes() const;
     bool isOne() const;
 
-    DepSet& getDeps() {
+    DependencySet& getDeps() {
       if (deps_ == NULL) {
-        deps_ = new DepSet();
-        DepSet& deps = *deps_;
-        for (INT32 i = 0; i < num_children(); i++) {
-          DepSet& other = getChild(i)->getDeps();
+        deps_ = new DependencySet();
+        DependencySet& deps = *deps_;
+        for (size_t i = 0; i < num_children(); i++) {
+          DependencySet& other = getChild(i)->getDeps();
           deps.insert(other.begin(), other.end());
         }
       }
       return *deps_;
     }
 
-    DependencySet computeDependencies() override;
+    DependencySet computeDependencies();
 
     UINT32 countLeadingZeros() {
       if (leading_zeros_ == (UINT32)-1)
@@ -198,14 +206,19 @@ class Expr : public DependencyNode {
     }
     virtual UINT32 _countLeadingZeros() const { return 0; }
     virtual void print(ostream& os=std::cerr, UINT depth=0) const;
+    friend ostream& operator<<(ostream &os, const Expr &e) {
+      os << e.toString();
+    }
     void printConstraints();
     std::string toString() const;
     void simplify();
 
     z3::expr& toZ3Expr(bool verbose=false) {
-      if (expr_ == NULL) {
+      if (expr_ == NULL || isInvalidated()) {
         z3::expr z3_expr = toZ3ExprRecursively(verbose);
+        delete expr_;
         expr_ = new z3::expr(z3_expr);
+        inval();
       }
       return *expr_;
     }
@@ -268,9 +281,34 @@ class Expr : public DependencyNode {
     RangeSet* getSignedRangeSet() const { return getRangeSet(false); }
     RangeSet* getUnsignedRangeSet() const { return getRangeSet(true); }
 
+
+    /// Make Expr symbolic and make every user of us as symbolic
+    void symbolize() {
+      inval();
+      if (isConcrete()) {
+        isConcrete_    = false;
+        for (auto it = uses_.begin(); it != uses_.end(); it++) {
+          WeakExprRef& ref = *it;
+          if (ref.expired())
+            continue;
+          ref.lock()->symbolize();
+        }
+      }
+    }
+
+   void trySymbolize() {
+     for(INT32 i=0; i<num_children(); ++i) {
+       auto e = getChild(i);
+       e->trySymbolize();
+     }
+     symbolize();
+   }
+
+    /// Make Expr concrete and try to make every user of us concrete
     void concretize() {
+      inval();
       if (!isConcrete()) {
-        isConcrete_ = true;
+        isConcrete_    = true;
         for (auto it = uses_.begin(); it != uses_.end(); it++) {
           WeakExprRef& ref = *it;
           if (ref.expired())
@@ -280,11 +318,12 @@ class Expr : public DependencyNode {
       }
     }
 
+    /// Try to make concrete iff every chil is concrete
     void tryConcretize() {
       if (isConcrete())
         return;
 
-      for (INT32 i = 0; i < num_children(); i++) {
+      for (size_t i = 0; i < num_children(); i++) {
         ExprRef e = getChild(i);
         if (!e->isConcrete())
           return;
@@ -306,9 +345,10 @@ class Expr : public DependencyNode {
 
     // concretization
     bool isConcrete_;
+    bool isInvalidated_;
 
     INT32 depth_;
-    DepSet* deps_;
+    DependencySet* deps_;
     WeakExprRefVectorTy uses_;
     UINT32 leading_zeros_;
     ExprRef evaluation_;
@@ -502,9 +542,9 @@ protected:
 
 class ReadExpr : public NonConstantExpr {
 public:
-  ReadExpr(UINT32 index)
+  ReadExpr(size_t index)
     : NonConstantExpr(Read, 8), index_(index) {
-    deps_ = new DepSet();
+    deps_ = new DependencySet();
     deps_->insert(index);
     isConcrete_ = false;
   }
@@ -513,7 +553,7 @@ public:
     return "Read";
   }
 
-  inline UINT32 index() const { return index_; }
+  inline size_t index() const { return index_; }
   static bool classOf(const Expr& e) { return e.kind() == Read; }
 
 protected:
@@ -523,6 +563,9 @@ protected:
   }
 
   z3::expr toZ3ExprRecursively(bool verbose) override {
+    if(isConcrete()) {
+      return evaluate()->toZ3Expr(verbose);
+    }
     z3::symbol symbol = context_.int_symbol(index_);
     z3::sort sort = context_.bv_sort(8);
     return context_.constant(symbol, sort);
@@ -538,7 +581,7 @@ protected:
   }
 
   ExprRef evaluateImpl() override;
-  UINT32 index_;
+  size_t index_;
 };
 
 class ConcatExpr : public NonConstantExpr {
@@ -638,7 +681,8 @@ public:
 
 protected:
   z3::expr toZ3ExprRecursively(bool verbose) override {
-    ExprRef e = children_[0];
+    ExprRef e = getChild(0);
+    if(isConcrete()) return evaluate()->toZ3Expr(verbose);
     return z3::zext(e->toZ3Expr(verbose), bits_ - e->bits());
   }
 
@@ -669,6 +713,7 @@ protected:
 
   z3::expr toZ3ExprRecursively(bool verbose) override {
     ExprRef e = getChild(0);
+    if(isConcrete()) return evaluate()->toZ3Expr(verbose);
     return z3::sext(e->toZ3Expr(verbose), bits_ - e->bits());
   }
 

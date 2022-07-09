@@ -159,8 +159,7 @@ UINT32 getMSB(
 
 // Expr declaration
 Expr::Expr(Kind kind, UINT32 bits)
-  : DependencyNode()
-  , kind_(kind)
+  : kind_(kind)
   , bits_(bits)
   , children_()
   , context_(*g_z3_context)
@@ -168,6 +167,7 @@ Expr::Expr(Kind kind, UINT32 bits)
   , hash_(NULL)
   , range_sets{}
   , isConcrete_(true)
+  , isInvalidated_(false)
   , depth_(-1)
   , deps_(NULL)
   , leading_zeros_((UINT)-1)
@@ -220,7 +220,7 @@ INT32 Expr::depth() {
 
 
 void Expr::print(ostream& os, UINT depth) const {
-  os << getName() << "(";
+  os << getName() << "[" << (isConcrete_ ? "concrete" : "symbolic") << "](";
   bool begin = !printAux(os);
   printChildren(os, begin, depth);
   os << ")";
@@ -244,19 +244,21 @@ std::string Expr::toString() const {
 }
 
 void Expr::simplify() {
-      if (isRelational(this)) {
-        // If an expression is relational expression,
-        // then simplify children to reuse the simplified expressions
-        for (INT32 i = 0; i < num_children(); i++)
-          children_[i]->simplify();
-      }
-      else {
-        if (expr_ == NULL) {
-          z3::expr z3_expr = toZ3Expr(true);
-          z3_expr = z3_expr.simplify();
-          expr_ = new z3::expr(z3_expr);
-        }
-      }
+  if (isRelational(this)) {
+    // If an expression is relational expression,
+    // then simplify children to reuse the simplified expressions
+    for (INT32 i = 0; i < num_children(); i++)
+      children_[i]->simplify();
+  }
+  else {
+    if (expr_ == NULL || isInvalidated_) {
+      z3::expr z3_expr = toZ3Expr(true);
+      z3_expr = z3_expr.simplify();
+      delete expr_;
+      expr_ = new z3::expr(z3_expr);
+      isInvalidated_ = false;
+    }
+  }
 }
 
 void Expr::printChildren(ostream& os, bool start, UINT depth) const {

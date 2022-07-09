@@ -3,7 +3,7 @@
 #include "dependency.h"
 
 namespace qsym {
-
+  /* @Information(alekum): DependencyNode ambiguous, so been removed
   DependencyNode::DependencyNode()
     : dependencies_(NULL)
   {}
@@ -17,5 +17,6 @@ namespace qsym {
       dependencies_ = new DependencySet(computeDependencies());
     return dependencies_;
   }
+  */
 
 } // namespace qsym

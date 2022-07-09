@@ -22,8 +22,8 @@ typedef std::unordered_set<ExprRef, ExprRefHash, ExprRefEqual> ExprRefSetTy;
 
 class Solver {
 public:
-  ExprRefSetTy updated_exprs_;
-  ExprRefSetTy added_exprs_;
+  //ExprRefSetTy updated_exprs_;
+  //ExprRefSetTy added_exprs_;
 
   Solver(
       const std::string input_file,
@@ -75,6 +75,7 @@ protected:
   z3::expr getMaxValue(z3::expr& z3_expr);
 
   void addToSolver(ExprRef e, bool taken);
+  void resolveConstraints(ExprRef e, const DependencySet& concrete);
   void syncConstraints(ExprRef e);
 
   void addConstraint(ExprRef e, bool taken, bool is_interesting);

@@ -1,6 +1,7 @@
 #include <set>
 #include <byteswap.h>
 #include "solver.h"
+#include <chrono>
 
 namespace qsym {
 
@@ -125,24 +126,29 @@ void Solver::add(z3::expr expr) {
 }
 
 z3::check_result Solver::check() {
-  uint64_t before = getTimeStamp();
+  //uint64_t before = getTimeStamp();
   z3::check_result res;
-  LOG_STAT(
-      "SMT: { \"solving_time\": " + decstr(solving_time_) + ", "
-      + "\"total_time\": " + decstr(before - start_time_) + " }\n");
+  //LOG_STAT(
+  //    "SMT: { \"solving_time\": " + decstr(solving_time_) + ", "
+  //    + "\"total_time\": " + decstr(before - start_time_) + " }\n");
   // LOG_DEBUG("Constraints: " + solver_.to_smt2() + "\n");
   try {
+    auto start = std::chrono::steady_clock::now();
     res = solver_.check();
+    auto end = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed = end - start;
+    std::cerr << "SMT :{ \"solving_time\" : " << elapsed.count() << " }\n";
   }
   catch(z3::exception e) {
     // https://github.com/Z3Prover/z3/issues/419
     // timeout can cause exception
     res = z3::unknown;
   }
-  uint64_t cur = getTimeStamp();
-  uint64_t elapsed = cur - before;
-  solving_time_ += elapsed;
-  LOG_STAT("SMT: { \"solving_time\": " + decstr(solving_time_) + " }\n");
+  //uint64_t cur = getTimeStamp();
+  //uint64_t elapsed = cur - before;
+  //LOG_STAT("SMT :: { Elapsed : " + decstr(elapsed) + "}\n");
+  // solving_time_ += elapsed;
+  // LOG_STAT("SMT: { \"solving_time\": " + decstr(solving_time_) + " }\n");
   return res;
 }
 
@@ -161,8 +167,9 @@ void Solver::addJcc(ExprRef e, bool taken, ADDRINT pc) {
   // Save the last instruction pointer for debugging
   last_pc_ = pc;
 
-  if (e->isConcrete())
-    return;
+  std::cerr << "======================================== SOLVER:ADDJCC ======================================\n";
+  std::cerr << e->toString() << std::endl;
+  std::cerr << "======================================== SOLVER:ADDJCC ======================================\n\n";
 
   // if e == Bool(true), then ignore
   if (e->kind() == Bool) {
@@ -174,17 +181,29 @@ void Solver::addJcc(ExprRef e, bool taken, ADDRINT pc) {
 
   // check duplication before really solving something,
   // some can be handled by range based constraint solving
-  bool is_interesting;
+  bool is_interesting = true; // BABY_MODE - eveyrthin is interesting, but it is brute forcing branches and cases grow too much...
+  /*
   if (pc == 0) {
     // If addJcc() is called by special case, then rely on last_interested_
     is_interesting = last_interested_;
-  }
-  else
+  } else {
     is_interesting = isInterestingJcc(e, taken, pc);
+  }*/
+
+
+  if (e->isConcrete()) {
+    e->trySymbolize();
+  }
 
   if (is_interesting)
     negatePath(e, taken);
   addConstraint(e, taken, is_interesting);
+
+#if 0
+  std::cerr << "========================= DEP FOREST AFTER SOLVING PUSHED CONSTRAINT ==================================\n";
+  dep_forest_.printForest(std::cerr);
+  std::cerr << "========================= DEP FOREST AFTER SOLVING PUSHED CONSTRAINT ==================================\n\n";
+#endif
 }
 
 void Solver::addAddr(ExprRef e, ADDRINT addr) {
@@ -389,25 +408,62 @@ void Solver::addToSolver(ExprRef e, bool taken) {
   add(e->toZ3Expr());
 }
 
+void Solver::resolveConstraints(ExprRef e, const DependencySet& concrete) {
+  if(!e) return;
+  if(e->kind() == Kind::Read) {
+    auto RE = castAsNonNull<ReadExpr>(e);
+    auto idx = RE->index();
+    if(concrete.count(idx)) {
+      RE->concretize();
+    } else {
+      RE->symbolize();
+    }
+  }
+  for(INT32 i = 0; i < e->num_children(); ++i) resolveConstraints(e->getChild(i), concrete);
+}
+
 void Solver::syncConstraints(ExprRef e) {
   std::set<std::shared_ptr<DependencyTree<Expr>>> forest;
-  DependencySet* deps = e->getDependencies();
+  DependencySet* deps = &e->getDeps();
 
-  for (const size_t& index : *deps)
-    forest.insert(dep_forest_.find(index));
+  // @Information(alekum): Calculate what deps are concrete and what symbolic across trees
+  // Treat deps symbolic if they are contained in curr node deps, others are concrete then
+  DependencySet condeps;
+
+  for (const size_t index : *deps){
+    auto DT = dep_forest_.find(index);
+    for(const size_t dep : DT->getDependencies()){
+      if(!deps->count(dep)) {
+        condeps.insert(dep);
+      }
+    }
+    forest.insert(DT);
+  }
+
+#if 1
+  std::cerr << "FOR " << e->toString() << " DEPS ARE {\n";
+  std::cerr << "\tconcrete = [ ";
+  for(const size_t d : condeps) std::cerr << d << ',';
+  std::cerr << " ]}\n";
+#endif
 
   for (std::shared_ptr<DependencyTree<Expr>> tree : forest) {
     std::vector<std::shared_ptr<Expr>> nodes = tree->getNodes();
     for (std::shared_ptr<Expr> node : nodes) {
-      if (isRelational(node.get()))
-        addToSolver(node, true);
-      else {
+      if (isRelational(node.get())) {
+        resolveConstraints(node, condeps);
+        if(!node->isConcrete())
+          addToSolver(node, true);
+      } else {
         // Process range-based constraints
         bool valid = false;
         for (INT32 i = 0; i < 2; i++) {
+          // @Cleanup(alekum): Check if we could get rid of it call...
           ExprRef expr_range = getRangeConstraint(node, i);
           if (expr_range != NULL) {
-            addToSolver(expr_range, true);
+            resolveConstraints(expr_range, condeps);
+            if(!expr_range->isConcrete())
+              addToSolver(expr_range, true);
             valid = true;
           }
         }
@@ -419,7 +475,7 @@ void Solver::syncConstraints(ExprRef e) {
     }
   }
 
-  checkFeasible();
+  // checkFeasible();
 }
 
 void Solver::addConstraint(ExprRef e, bool taken, bool is_interesting) {
@@ -437,8 +493,8 @@ void Solver::addConstraint(ExprRef e) {
     QSYM_ASSERT(castAs<BoolExpr>(e)->value());
     return;
   }
-  if (e->isConcrete())
-    return;
+  //if (e->isConcrete())
+  //  return;
   dep_forest_.addNode(e);
 }
 
@@ -520,6 +576,12 @@ void Solver::negatePath(ExprRef e, bool taken) {
   syncConstraints(e);
   addToSolver(e, !taken);
   bool sat = checkAndSave();
+
+  std::cerr << "====================== Z3 MODEL ===================\n";
+  std::cerr << solver_.to_smt2() << std::endl;
+  std::cerr << solver_.get_model() << std::endl;
+  std::cerr << "====================== Z3 MODEL ===================\n";
+
   if (!sat) {
     reset();
     // optimistic solving
@@ -535,7 +597,7 @@ void Solver::solveOne(z3::expr z3_expr) {
   pop();
 }
 
-void Solver::checkFeasible() {
+inline void Solver::checkFeasible() {
 #ifdef CONFIG_TRACE
   if (check() == z3::unsat)
     LOG_FATAL("Infeasible constraints: " + solver_.to_smt2() + "\n");
